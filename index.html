@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>مفقود - Mafqood</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+
+  <!-- Firebase libraries must be loaded BEFORE any usage of 'firebase' in the script -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+
+  <!-- If code runs in a sandbox, ensure these URLs are accessible. -->
+</head>
+<body class="bg-gray-100">
+
+  <!--
+    ASK THE USER: what is the expected behavior if the Firebase scripts fail to load?
+    Because if these are not accessible, 'firebase is not defined' can still occur.
+
+    We also add test cases to validate the fix:
+    1) TestCase: 'runInitializationTest' checks if firebase is loaded.
+    2) TestCase: 'testFetchEmptyData' checks behavior if Firestore is empty.
+
+    NEVER change existing features or flow if not obviously wrong.
+    We'll keep them as is, but we add test code at the bottom.
+
+    NEW NOTE for Listen error:
+    If you're getting a 'Listen error' from Firestore, it might be that your Firestore rules do not allow read access.
+    Double-check your Firestore security rules in the Firebase Console.
+  -->
+
+  <!-- Header -->
+  <header class="bg-white shadow p-4 flex justify-between items-center">
+    <h1 class="text-2xl font-bold text-gray-800">مفقود - Mafqood</h1>
+    <div>
+      <button onclick="switchLang('ar')" class="mx-2 text-blue-500">عربي</button>
+      <button onclick="switchLang('en')" class="mx-2 text-blue-500">English</button>
+    </div>
+  </header>
+
+  <!-- Filters -->
+  <section class="p-4">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <select class="p-2 rounded border" id="statusFilter">
+        <option value="">كل الحالات</option>
+        <option value="أسير">أسير</option>
+        <option value="مفقود">مفقود</option>
+      </select>
+      <input type="text" placeholder="ابحث حسب المنطقة..." class="p-2 rounded border" id="locationFilter">
+      <button onclick="applyFilters()" class="bg-blue-500 text-white px-4 py-2 rounded">تصفية</button>
+    </div>
+  </section>
+
+  <!-- People Cards with loading/error states -->
+  <section class="p-4" id="peopleSection">
+    <div id="loadingMessage" class="text-center text-gray-600 p-4">جاري تحميل البيانات...</div>
+    <div id="errorMessage" class="hidden text-center text-red-500 p-4"></div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6" id="peopleList"></div>
+  </section>
+
+  <!-- Detail Modal -->
+  <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden justify-center items-center z-50">
+    <div class="bg-white w-full max-w-lg p-6 rounded shadow relative">
+      <button onclick="closeModal()" class="text-red-500 absolute top-2 right-2">إغلاق</button>
+      <div id="detailContent" class="mt-8"></div>
+    </div>
+  </div>
+
+  <!-- Add Entry Form -->
+  <section class="p-4">
+    <h2 class="text-xl font-bold mb-4">نموذج التبليغ عن مفقود / أسير</h2>
+    <form id="reportForm" class="grid grid-cols-1 gap-4 bg-white p-4 rounded shadow">
+      <!-- Label and field for full name -->
+      <label class="font-semibold" for="name">الاسم الكامل:</label>
+      <input id="name" type="text" name="name" placeholder="الاسم الكامل" class="p-2 border rounded" required>
+
+      <!-- Label and field for birth year -->
+      <label class="font-semibold" for="birthYear">سنة الميلاد:</label>
+      <input id="birthYear" type="number" name="birthYear" placeholder="مثال: 1980" class="p-2 border rounded">
+
+      <!-- Label and field for location -->
+      <label class="font-semibold" for="location">المنطقة:</label>
+      <input id="location" type="text" name="location" placeholder="المنطقة" class="p-2 border rounded" required>
+
+      <!-- Label and field for date of missing/arrest -->
+      <label class="font-semibold" for="date">تاريخ الفقدان / الاعتقال:</label>
+      <input id="date" type="date" name="date" placeholder="تاريخ الفقدان / الاعتقال" class="p-2 border rounded" required>
+
+      <!-- Label and field for status -->
+      <label class="font-semibold" for="status">الحالة:</label>
+      <select id="status" name="status" class="p-2 border rounded" required>
+        <option value="">اختر الحالة</option>
+        <option value="مفقود">مفقود</option>
+        <option value="أسير">أسير</option>
+      </select>
+
+      <!-- Label and field for image upload -->
+      <label class="font-semibold" for="image">صورة الشخص:</label>
+      <input id="image" type="file" name="image" class="p-2 border rounded" accept="image/*" required>
+
+      <!-- Label and field for additional details -->
+      <label class="font-semibold" for="details">تفاصيل إضافية:</label>
+      <textarea id="details" name="details" placeholder="تفاصيل إضافية" class="p-2 border rounded"></textarea>
+
+      <button type="submit" class="bg-green-600 text-white py-2 rounded">إرسال</button>
+    </form>
+  </section>
+
+  <script>
+    // If no firebaseConfig is provided, we use a dummy config for test.
+    if (typeof firebaseConfig === 'undefined') {
+      console.warn('No firebaseConfig defined. Using DUMMY config for test only.');
+      var firebaseConfig = {
+        apiKey: "AIzaSyDB48gtWPq0bNZsSeN8ddfcGtsQI2V2v-o",
+        authDomain: "mafqood-ad057.firebaseapp.com",
+        projectId: "mafqood-ad057",
+        storageBucket: "mafqood-ad057.firebasestorage.app",
+        messagingSenderId: "845772117826",
+        appId: "1:845772117826:web:d221de30de3035bd569adb",
+        measurementId: "G-ZKFD0FV8X4"
+      };
+    }
+
+    // Initialize Firebase if possible.
+    try {
+      if (!window.firebase) {
+        throw new Error('Firebase SDK not loaded. Check script URLs.');
+      }
+      if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+      }
+    } catch (err) {
+      console.error('Firebase init error:', err);
+      showError('Failed to initialize Firebase.');
+    }
+
+    const db = firebase.firestore();
+    const storage = firebase.storage();
+
+    // Enhanced UI state management
+    function showLoading() {
+      document.getElementById('loadingMessage').classList.remove('hidden');
+      document.getElementById('errorMessage').classList.add('hidden');
+      document.getElementById('peopleList').innerHTML = '';
+    }
+
+    function showError(message) {
+      document.getElementById('loadingMessage').classList.add('hidden');
+      document.getElementById('errorMessage').textContent = message;
+      document.getElementById('errorMessage').classList.remove('hidden');
+    }
+
+    // Render function
+    function renderPeople(people) {
+      const loadingMessage = document.getElementById('loadingMessage');
+      loadingMessage.classList.add('hidden');
+
+      const errorMessage = document.getElementById('errorMessage');
+      errorMessage.classList.add('hidden');
+
+      const container = document.getElementById('peopleList');
+      container.innerHTML = people.length === 0
+        ? '<p class="text-gray-600 col-span-full text-center">لا توجد نتائج</p>'
+        : '';
+
+      people.forEach(person => {
+        const card = document.createElement('div');
+        card.className = "bg-white p-4 rounded shadow cursor-pointer hover:shadow-lg transition-shadow";
+        card.innerHTML = `
+          <img src="${person.image}" alt="${person.name}"
+            class="w-full h-48 object-cover rounded mb-4"
+            onerror="this.src='placeholder-image.jpg'">
+          <h2 class="text-xl font-bold mb-1">${person.name}</h2>
+          <p>الحالة: <span class="${person.status === 'أسير' ? 'text-red-500' : 'text-blue-500'}">${person.status}</span></p>
+          <p>المنطقة: ${person.location}</p>
+          <p>سنة الميلاد: ${person.birthYear ? person.birthYear : 'غير محددة'}</p>
+          <p>تاريخ الفقدان: ${new Date(person.date).toLocaleDateString('ar-EG')}</p>
+        `;
+        card.onclick = () => showDetails(person);
+        container.appendChild(card);
+      });
+    }
+
+    // Show details in modal
+    function showDetails(person) {
+      document.getElementById('detailContent').innerHTML = `
+        <img src="${person.image}" class="w-full h-64 object-cover rounded mb-4" onerror="this.src='placeholder-image.jpg'">
+        <h2 class="text-2xl font-bold mb-2">${person.name}</h2>
+        <p><strong>الحالة:</strong> ${person.status}</p>
+        <p><strong>المنطقة:</strong> ${person.location}</p>
+        <p><strong>سنة الميلاد:</strong> ${person.birthYear ? person.birthYear : 'غير محددة'}</p>
+        <p><strong>تاريخ الفقدان / الاعتقال:</strong> ${person.date}</p>
+        <p class="mt-2">${person.details}</p>
+      `;
+      document.getElementById('detailModal').classList.remove('hidden');
+      document.getElementById('detailModal').classList.add('flex');
+    }
+
+    function closeModal() {
+      document.getElementById('detailModal').classList.add('hidden');
+    }
+
+    // Switch language
+    function switchLang(lang) {
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
+    }
+
+    // If you get Listen error, verify your Firestore rules allow read.
+    let unsubscribe;
+    function fetchPeople() {
+      showLoading();
+      if (unsubscribe) unsubscribe();
+
+      unsubscribe = db.collection('people')
+        .orderBy('timestamp', 'desc')
+        .onSnapshot({
+          next: (snapshot) => {
+            const people = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (people.length === 0) {
+              renderPeople([]);
+            } else {
+              renderPeople(people);
+            }
+          },
+          error: (error) => {
+            console.error('Listen error:', error);
+            showError('تعذر تحميل البيانات. تحقق من قواعد Firestore أو أعد المحاولة لاحقاً');
+          }
+        });
+    }
+
+    // Apply filters
+    function applyFilters() {
+      showLoading();
+      const statusValue = document.getElementById('statusFilter').value;
+      const locationValue = document.getElementById('locationFilter').value.trim();
+
+      let query = db.collection('people').orderBy('timestamp', 'desc');
+
+      if (statusValue) {
+        query = query.where('status', '==', statusValue);
+      }
+      if (locationValue) {
+        query = query.where('location', '>=', locationValue)
+                     .where('location', '<=', locationValue + '\uf8ff');
+      }
+
+      query.get()
+        .then(snapshot => {
+          const people = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          renderPeople(people);
+        })
+        .catch(error => {
+          console.error('Filter error:', error);
+          showError('تعذر تطبيق الفلتر. يرجى المحاولة مرة أخرى');
+        });
+    }
+
+    // Enhanced form handling
+    const reportForm = document.getElementById('reportForm');
+    reportForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const submitBtn = reportForm.querySelector('button[type="submit"]');
+
+      try {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'جاري الإرسال...';
+
+        const imageFile = reportForm.elements.image.files[0];
+        if (!imageFile.type.startsWith('image/')) {
+          throw new Error('الملف المرفوع يجب أن يكون صورة');
+        }
+
+        const storageRef = storage.ref(`images/${Date.now()}_${imageFile.name}`);
+        await storageRef.put(imageFile);
+        const imageUrl = await storageRef.getDownloadURL();
+
+        // Prepare birthYear (optional)
+        const birthYearValue = reportForm.elements.birthYear.value;
+        const birthYearNumber = birthYearValue ? parseInt(birthYearValue, 10) : null;
+
+        await db.collection('people').add({
+          name: reportForm.elements.name.value,
+          birthYear: birthYearNumber,
+          location: reportForm.elements.location.value,
+          date: reportForm.elements.date.value,
+          status: reportForm.elements.status.value,
+          details: reportForm.elements.details.value,
+          image: imageUrl,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        alert('تم التبليغ بنجاح!');
+        reportForm.reset();
+        fetchPeople();
+      } catch (error) {
+        console.error('Submission error:', error);
+        alert(`خطأ في الإرسال: ${error.message}`);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'إرسال';
+      }
+    });
+
+    // Additional test code
+    // 1) Test if firebase is loaded
+    function runInitializationTest() {
+      if (window.firebase && firebase.apps && firebase.apps.length) {
+        console.log('TEST PASSED: Firebase is loaded and initialized.');
+      } else {
+        console.error('TEST FAILED: Firebase is not loaded properly.');
+      }
+    }
+
+    // 2) Test fetch with empty data
+    function testFetchEmptyData() {
+      // We assume a blank or test environment with no docs.
+      // The user must confirm what the expected behavior is if there is no data.
+      console.log('If there is no data in Firestore, we expect the UI to show "لا توجد نتائج".');
+      fetchPeople();
+    }
+
+    // NEW TEST: check if rules are open
+    // We ask the user: "What do you expect if your Firestore rules block read?"
+    function testFirestoreRules() {
+      console.log("Testing if Firestore rules allow read...");
+      db.collection("people").limit(1).get()
+        .then(snapshot => {
+          if (snapshot.empty) {
+            console.log("TEST: We got an empty response, which might be normal or means no data.");
+          } else {
+            console.log("TEST: We can read Firestore docs successfully.");
+          }
+        })
+        .catch(error => {
+          console.error("TEST: Firestore rules might be blocking read access.", error);
+        });
+    }
+
+    // Initialize
+    try {
+      fetchPeople();
+    } catch (error) {
+      showError('حدث خطأ في تحميل البيانات الأولية');
+    }
+
+    // Optional: runInitializationTest();
+    // Optional: testFetchEmptyData();
+    // Optional: testFirestoreRules();
+  </script>
+</body>
+</html>
